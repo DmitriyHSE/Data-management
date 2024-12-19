@@ -33,6 +33,7 @@ class Database:
                 try:
                     with open("functions.sql", "r", encoding="utf-8") as file:
                         cursor_.execute(file.read())
+                    self.connection.commit()
                 except FileNotFoundError:
                     print("File 'functions.sql' not found. Please ensure it exists in the working directory.")
                 except Exception as e:
@@ -67,12 +68,32 @@ class Database:
             print(f"Error calling 'create_database': {e}")
     def delete_database(self):
         self.connectDB("postgres")
-        self.cursor.execute(sql.SQL(f"DROP DATABASE {self.dbname}"))
+        self.cursor = self.connection.cursor()
+        self.cursor.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(self.dbname)))
         self.connection.close()
-        del self
-    def add_to_schedule(self, lesson_id,teacher_id,group_id,day_of_the_week,korpus,number_of_auditoria,type_of_lesson,lesson_time):
-        self.cursor.callproc("add_to_schedule", (lesson_id,teacher_id,group_id,day_of_the_week,korpus,number_of_auditoria,type_of_lesson,lesson_time,))
-
-    def get_departments(self):
+    def get_schedule(self):
         self.cursor.callproc("get_schedule")
         return self.cursor.fetchone()[0]
+    def add_to_schedule(self, lesson_id,teacher_id,group_id,day_of_the_week,korpus,number_of_auditoria,type_of_lesson,lesson_time):
+        self.cursor.callproc("add_to_schedule", (lesson_id,teacher_id,group_id,day_of_the_week,korpus,number_of_auditoria,type_of_lesson,lesson_time))
+
+    def add_to_disciplines(self, discipline_id, title):
+        self.cursor.callproc("add_to_disciplines", (discipline_id, title))
+
+    def update_schedule_by_lesson_id(self,new_lesson_id,lesson_id):
+        self.cursor.callproc("update_schedule_lesson_id", (new_lesson_id,lesson_id,))
+
+    def update_schedule_by_korpus(self,new_korpus,lesson_id):
+        self.cursor.callproc("update_schedule_korpus", (new_korpus,lesson_id,))
+
+    def update_schedule_by_teacher_id(self,new_teacher_id,lesson_id):
+        self.cursor.callproc("update_schedule_teacher_id", (new_teacher_id,lesson_id,))
+
+    def update_schedule_by_korpus(self,new_day_of_the_week,lesson_id):
+        self.cursor.callproc("update_schedule_day_of_the_week", (new_day_of_the_week,lesson_id,))
+
+    def update_schedule_by_korpus(self,new_number_of_auditoria,lesson_id):
+        self.cursor.callproc("update_schedule_number_of_auditoria", (new_number_of_auditoria,lesson_id,))
+
+    def update_schedule_by_korpus(self,new_type_of_lesson,lesson_id):
+        self.cursor.callproc("update_type_of_lesson", (new_type_of_lesson,lesson_id,))
