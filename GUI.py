@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QFormLayout,
     QMenu,
+    QHBoxLayout,
 )
 from PyQt6.QtCore import Qt
 import psycopg2
@@ -26,6 +27,93 @@ DB_USER = "postgres"
 DB_PASSWORD = "admin"
 DB_HOST = "127.0.0.1"
 DB_PORT = "5432"
+
+
+class SearchDialog(QDialog):
+    def __init__(self, parent=None, db_name=None, tables=None):
+        super().__init__(parent)
+        self.setWindowTitle("Поиск в таблице")
+        self.db_name = db_name
+
+        self.table_label = QLabel("Выберите таблицу:")
+        self.table_combo = QComboBox()
+        if tables:
+            self.table_combo.addItems(tables)
+
+        self.column_label = QLabel("Выберите столбец:")
+        self.column_combo = QComboBox()
+
+        if tables:
+            self.table_combo.setCurrentIndex(0)  # Устанавливаем первый элемент
+            self.update_columns()  # Вызываем update_columns после инициализации table_combo
+
+        self.table_combo.currentIndexChanged.connect(self.update_columns)
+
+        self.search_label = QLabel("Введите значение для поиска:")
+        self.search_input = QLineEdit()
+
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+
+        layout = QVBoxLayout()
+        layout.addWidget(self.table_label)
+        layout.addWidget(self.table_combo)
+        layout.addWidget(self.column_label)
+        layout.addWidget(self.column_combo)
+        layout.addWidget(self.search_label)
+        layout.addWidget(self.search_input)
+        layout.addWidget(button_box)
+
+        self.setLayout(layout)
+
+    def get_search_text(self):
+        return self.search_input.text().strip()
+
+    def get_selected_table(self):
+        return self.table_combo.currentText()
+
+    def get_selected_column(self):
+        return self.column_combo.currentText()
+
+    def update_columns(self):
+        conn = None
+        try:
+            conn = psycopg2.connect(
+                database=self.db_name, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
+            )
+            cur = conn.cursor()
+            selected_table = self.table_combo.currentText()
+            cur.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name = '{selected_table}'")
+            columns = [row[0] for row in cur.fetchall()]
+            text_columns = []
+            for column in columns:
+                cur.execute(
+                    f"SELECT data_type, is_nullable FROM information_schema.columns WHERE table_name = '{selected_table}' and column_name = '{column}';")
+                data_type, is_nullable = cur.fetchone()
+                if (data_type == 'text' or data_type == 'character varying') and is_nullable == 'YES':
+                    cur.execute(f"""SELECT COUNT(*)
+                     FROM information_schema.table_constraints AS tc
+                     JOIN information_schema.key_column_usage AS kcu
+                     ON tc.constraint_name = kcu.constraint_name
+                     AND tc.table_schema = kcu.table_schema
+                     AND tc.table_name = kcu.table_name
+                     WHERE tc.constraint_type = 'PRIMARY KEY'
+                     AND tc.table_name = '{selected_table}' AND kcu.column_name = '{column}';""")
+                    is_primary = cur.fetchone()[0]
+                    if is_primary == 0:
+                        text_columns.append(column)
+
+            self.column_combo.clear()
+            self.column_combo.addItems(text_columns)
+        except psycopg2.Error as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось получить поля таблицы: {e}")
+        finally:
+            if conn:
+                cur.close()
+                conn.close()
 
 
 class CreateDatabaseDialog(QDialog):
@@ -126,11 +214,10 @@ class AddDataDialog(QDialog):
 
             layout = QFormLayout()
             for column in self.columns:
-              label = QLabel(column)
-              input_field = QLineEdit()
-              layout.addRow(label, input_field)
-              self.field_inputs[column] = input_field
-
+                label = QLabel(column)
+                input_field = QLineEdit()
+                layout.addRow(label, input_field)
+                self.field_inputs[column] = input_field
 
             button_box = QDialogButtonBox(
                 QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -143,7 +230,7 @@ class AddDataDialog(QDialog):
 
         except psycopg2.Error as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось получить поля таблицы: {e}")
-            self.reject() # Закрываем диалог если не удалось получить поля
+            self.reject()  # Закрываем диалог если не удалось получить поля
         finally:
             if self.conn:
                 cur.close()
@@ -159,30 +246,86 @@ class AddDataDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.table_windows = {}  # Словарь для хранения открытых окон с таблицами
-        self.setWindowTitle("Управление базами данных")
-        self.setGeometry(100, 100, 300, 300)  # Задаем размеры окна
+        self.setWindowTitle("База данных")
+        self.setGeometry(100, 100, 800, 600)
+        self.central_widget = QWidget(self)
+        self.setCentralWidget(self.central_widget)
+        self.layout = QVBoxLayout(self.central_widget)
+        self.table_windows = {}
 
-        # Создаем кнопки для создания, удаления и просмотра таблиц
-        create_db_button = QPushButton("Создать базу данных", self)
-        create_db_button.clicked.connect(self.create_database)
+        self.create_db_button = QPushButton("Создать базу данных", self)
+        self.create_db_button.clicked.connect(self.create_db_dialog)
+        self.layout.addWidget(self.create_db_button)
 
-        delete_db_button = QPushButton("Удалить базу данных", self)
-        delete_db_button.clicked.connect(self.delete_database)
+        self.delete_db_button = QPushButton("Удалить базу данных", self)
+        self.delete_db_button.clicked.connect(self.delete_db_dialog)
+        self.layout.addWidget(self.delete_db_button)
 
-        show_tables_button = QPushButton("Показать таблицы", self)
-        show_tables_button.clicked.connect(self.show_tables)
+        self.show_tables_button = QPushButton("Показать таблицы", self)
+        self.show_tables_button.clicked.connect(self.show_tables_dialog)
+        self.layout.addWidget(self.show_tables_button)
 
-        # Создаем компоновку
+        search_db_button = QPushButton("Поиск", self)
+        search_db_button.clicked.connect(self.search_data)
+        self.layout.addWidget(search_db_button)
+
+        delete_search_button = QPushButton("Удалить по поиску", self)
+        delete_search_button.clicked.connect(self.delete_by_search)
+        self.layout.addWidget(delete_search_button)
+
+    def create_db_dialog(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Создать базу данных")
+
+        db_name_label = QLabel("Имя базы данных:")
+        db_name_input = QLineEdit()
+
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(lambda: self.create_db_structure(db_name_input.text().strip(), dialog))
+        button_box.rejected.connect(dialog.reject)
         layout = QVBoxLayout()
-        layout.addWidget(create_db_button)
-        layout.addWidget(delete_db_button)
-        layout.addWidget(show_tables_button)
+        layout.addWidget(db_name_label)
+        layout.addWidget(db_name_input)
+        layout.addWidget(button_box)
+        dialog.setLayout(layout)
+        dialog.exec()
 
-        # Создаем виджет
-        central_widget = QWidget()
-        central_widget.setLayout(layout)
-        self.setCentralWidget(central_widget)
+    def delete_db_dialog(self):
+        db_names = self.get_existing_databases()
+        if not db_names:
+            QMessageBox.warning(
+                self, "Предупреждение", "Нет доступных баз данных для удаления."
+            )
+            return
+        select_db_dialog = SelectDatabaseDialog(self, db_names=db_names)
+        result = select_db_dialog.exec()
+        if result == QDialog.DialogCode.Accepted:
+            db_name = select_db_dialog.get_selected_db()
+            if db_name:
+                confirm = QMessageBox.question(
+                    self,
+                    "Подтверждение",
+                    f"Вы уверены, что хотите удалить базу данных '{db_name}'?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                )
+                if confirm == QMessageBox.StandardButton.Yes:
+                    self.delete_db_structure(db_name)
+
+    def show_tables_dialog(self):  # Исправлен вызов метода
+        db_names = self.get_existing_databases()
+        if not db_names:
+            QMessageBox.warning(
+                self, "Предупреждение", "Нет доступных баз данных для отображения."
+            )
+            return
+        select_db_dialog = SelectDatabaseDialog(self, db_names=db_names)
+        result = select_db_dialog.exec()
+        if result == QDialog.DialogCode.Accepted:
+            db_name = select_db_dialog.get_selected_db()
+            if db_name:
+                self.show_tables_content(db_name)
 
     def get_existing_databases(self):
         """Функция для получения списка существующих баз данных."""
@@ -283,12 +426,15 @@ class MainWindow(QMainWindow):
             for table in tables:
                 table_widget = QTableWidget()
                 self.update_table_data(table_widget, table, db_name)
-                table_widget.itemChanged.connect(lambda item, t=table, tw=table_widget: self.cell_changed(item, t, db_name, tw))
+                table_widget.itemChanged.connect(
+                    lambda item, t=table, tw=table_widget: self.cell_changed(item, t, db_name, tw))
                 table_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-                table_widget.customContextMenuRequested.connect(lambda pos, t=table, tw=table_widget: self.show_context_menu(pos, t, db_name, tw))
+                table_widget.customContextMenuRequested.connect(
+                    lambda pos, t=table, tw=table_widget: self.show_context_menu(pos, t, db_name, tw))
                 # Кнопка для очистки таблицы
                 clear_table_button = QPushButton(f"Очистить таблицу {table}")
-                clear_table_button.clicked.connect(lambda checked, t=table, tw=table_widget: self.clear_table(t, db_name, tw))
+                clear_table_button.clicked.connect(
+                    lambda checked, t=table, tw=table_widget: self.clear_table(t, db_name, tw))
                 # Кнопка для добавления в таблицу
                 add_data_button = QPushButton(f"Добавить в таблицу {table}")
                 add_data_button.clicked.connect(lambda checked, t=table, tw=table_widget: self.add_data(t, db_name, tw))
@@ -555,47 +701,226 @@ class MainWindow(QMainWindow):
                 cur.close()
                 conn.close()
 
-    def create_db_structure(self, db_name):
+    def search_data(self):
+        db_names = self.get_existing_databases()
+        if not db_names:
+            QMessageBox.warning(
+                self, "Предупреждение", "Нет доступных баз данных для поиска."
+            )
+            return
+
+        select_db_dialog = SelectDatabaseDialog(self, db_names=db_names)
+        result = select_db_dialog.exec()
+
+        if result == QDialog.DialogCode.Accepted:
+            db_name = select_db_dialog.get_selected_db()
+            if db_name:
+                self.perform_search(db_name)
+            else:
+                QMessageBox.warning(
+                    self, "Предупреждение", "База данных для поиска не выбрана."
+                )
+
+    def perform_search(self, db_name):
+        conn = None
+        try:
+            conn = psycopg2.connect(
+                database=db_name, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
+            )
+            cur = conn.cursor()
+
+            cur.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE';")
+            tables = [row[0] for row in cur.fetchall()]
+            search_dialog = SearchDialog(self, db_name, tables)
+            result = search_dialog.exec()
+            if result == QDialog.DialogCode.Accepted:
+                search_text = search_dialog.get_search_text()
+                table_name = search_dialog.get_selected_table()
+                selected_column = search_dialog.get_selected_column()
+                if search_text and table_name and selected_column:
+                    self.show_search_results(db_name, table_name, search_text, selected_column)
+                else:
+                    QMessageBox.warning(self, "Предупреждение",
+                                        "Поисковой запрос, таблица или столбец не могут быть пустыми.")
+
+        except psycopg2.Error as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось выполнить поиск: {e}")
+        finally:
+            if conn:
+                cur.close()
+                conn.close()
+
+    def show_search_results(self, db_name, table_name, search_text, selected_column):
+        conn = None
+        try:
+            conn = psycopg2.connect(
+                database=db_name, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
+            )
+            cur = conn.cursor()
+            cur.execute(f"SELECT * FROM {table_name} WHERE {selected_column} LIKE %s", ('%' + search_text + '%',))
+            rows = cur.fetchall()
+            headers = [desc[0] for desc in cur.description]
+            if not rows:
+                QMessageBox.information(self, "Информация",
+                                        f"По запросу '{search_text}' в таблице '{table_name}' по столбцу '{selected_column}' ничего не найдено.")
+                return
+
+            table_widget = QTableWidget()
+            table_widget.setColumnCount(len(headers))
+            table_widget.setHorizontalHeaderLabels(headers)
+            table_widget.setRowCount(len(rows))
+
+            for row_idx, row_data in enumerate(rows):
+                for col_idx, cell_data in enumerate(row_data):
+                    item = QTableWidgetItem(str(cell_data))
+                    table_widget.setItem(row_idx, col_idx, item)
+
+            search_window = QMainWindow(self)
+            search_window.setWindowTitle(
+                f"Результаты поиска '{search_text}' в таблице '{table_name}' по столбцу '{selected_column}'")
+            search_window.setCentralWidget(table_widget)
+            search_window.setGeometry(100, 100, 600, 400)
+            search_window.show()
+
+        except psycopg2.Error as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось выполнить поиск: {e}")
+        finally:
+            if conn:
+                cur.close()
+                conn.close()
+
+    def delete_by_search(self):
+        db_names = self.get_existing_databases()
+        if not db_names:
+            QMessageBox.warning(
+                self, "Предупреждение", "Нет доступных баз данных для удаления по поиску."
+            )
+            return
+        select_db_dialog = SelectDatabaseDialog(self, db_names=db_names)
+        result = select_db_dialog.exec()
+        if result == QDialog.DialogCode.Accepted:
+            db_name = select_db_dialog.get_selected_db()
+            if db_name:
+                self.perform_delete_by_search(db_name)
+            else:
+                QMessageBox.warning(
+                    self, "Предупреждение", "База данных для удаления по поиску не выбрана."
+                )
+
+    def perform_delete_by_search(self, db_name):
+        conn = None
+        try:
+            conn = psycopg2.connect(
+                database=db_name, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
+            )
+            cur = conn.cursor()
+
+            cur.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE';")
+            tables = [row[0] for row in cur.fetchall()]
+            search_dialog = SearchDialog(self, db_name, tables)
+            result = search_dialog.exec()
+            if result == QDialog.DialogCode.Accepted:
+                search_text = search_dialog.get_search_text()
+                table_name = search_dialog.get_selected_table()
+                selected_column = search_dialog.get_selected_column()
+                if search_text and table_name and selected_column:
+                    self.delete_search_results(db_name, table_name, search_text, selected_column)
+                else:
+                    QMessageBox.warning(self, "Предупреждение",
+                                        "Поисковой запрос, таблица или столбец не могут быть пустыми.")
+
+        except psycopg2.Error as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось выполнить поиск для удаления: {e}")
+        finally:
+            if conn:
+                cur.close()
+                conn.close()
+
+    def delete_search_results(self, db_name, table_name, search_text, selected_column):
+        conn = None
+        try:
+            conn = psycopg2.connect(
+                database=db_name, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
+            )
+            cur = conn.cursor()
+            cur.execute(f"SELECT * FROM {table_name} WHERE {selected_column} LIKE %s", ('%' + search_text + '%',))
+            rows = cur.fetchall()
+            if not rows:
+                QMessageBox.information(self, "Информация",
+                                        f"По запросу '{search_text}' в таблице '{table_name}' по столбцу '{selected_column}' ничего не найдено.")
+                return
+
+            confirm = QMessageBox.question(
+                self,
+                "Подтверждение",
+                f"Вы уверены, что хотите удалить все строки, где столбец '{selected_column}' содержит '{search_text}' в таблице '{table_name}'?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if confirm == QMessageBox.StandardButton.Yes:
+                cur.execute(f"DELETE FROM {table_name} WHERE {selected_column} LIKE %s", ('%' + search_text + '%',))
+                conn.commit()
+                QMessageBox.information(self, "Успех",
+                                        f"Были удалены все строки, где столбец '{selected_column}' содержал '{search_text}' из таблицы '{table_name}'.")
+
+        except psycopg2.Error as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось выполнить поиск и удаление: {e}")
+        finally:
+            if conn:
+                cur.close()
+                conn.close()
+
+    def create_db_structure(self, db_name, dialog):
+        if not db_name:
+            QMessageBox.warning(self, "Предупреждение", "Имя базы данных не может быть пустым.")
+            return
         conn = None
         try:
             conn = psycopg2.connect(
                 user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
             )
-            conn.autocommit = True  # Для выполнения create database
+            conn.autocommit = True
             cur = conn.cursor()
-
             cur.execute(f"CREATE DATABASE {db_name}")
-            QMessageBox.information(
-                self, "Успех", f"База данных '{db_name}' успешно создана."
-            )
+            self.create_tables(db_name)
+            QMessageBox.information(self, "Успех", f"База данных '{db_name}' успешно создана.")
+            dialog.accept()
+        except psycopg2.Error as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось создать базу данных: {e}")
+        finally:
+            if conn:
+                cur.close()
+                conn.close()
 
-            conn.close()  # Закрываем соединение и сразу открываем новое
+    def create_tables(self, db_name):
+        conn = None
+        try:
             conn = psycopg2.connect(
-                database=db_name,
-                user=DB_USER,
-                password=DB_PASSWORD,
-                host=DB_HOST,
-                port=DB_PORT,
+                database=db_name, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
             )
             cur = conn.cursor()
-            # SQL-запрос для создания таблиц (если их еще нет)
-            create_tables_query = """
-                CREATE TABLE IF NOT EXISTS Disciplines (
+            cur.execute("""
+              CREATE TABLE IF NOT EXISTS Disciplines (
                     Disciple_id TEXT PRIMARY KEY,
                     Name TEXT
                 );
-
-                CREATE TABLE IF NOT EXISTS Teachers (
+           """)
+            cur.execute("""
+              CREATE TABLE IF NOT EXISTS Teachers (
                     Teacher_id TEXT PRIMARY KEY,
                     FIO TEXT
                 );
-
-                CREATE TABLE IF NOT EXISTS Groups (
+            """)
+            cur.execute("""
+              CREATE TABLE IF NOT EXISTS Groups (
                     Group_id TEXT PRIMARY KEY,
                     GroupName TEXT,
                     Lessons_per_week INT DEFAULT 1
                 );
-                 CREATE TABLE IF NOT EXISTS Schedule (
+           """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS Schedule (
                     Lesson_id TEXT PRIMARY KEY,
                     Teacher_id TEXT REFERENCES Teachers(Teacher_id),
                     Group_id TEXT REFERENCES Groups(Group_id),
@@ -605,57 +930,42 @@ class MainWindow(QMainWindow):
                     LessonType TEXT,
                     LessonTime TEXT
                 );
-
-                 CREATE TABLE IF NOT EXISTS Students (
+            """)
+            cur.execute("""
+               CREATE TABLE IF NOT EXISTS Students (
                     Student_id TEXT PRIMARY KEY,
                     FIO TEXT
                 );
-               CREATE TABLE IF NOT EXISTS Group_Students (
+            """)
+            cur.execute("""
+              CREATE TABLE IF NOT EXISTS Group_Students (
                    Group_id TEXT REFERENCES Groups(Group_id),
                    Student_id TEXT REFERENCES Students(Student_id),
                    PRIMARY KEY(Group_id, Student_id)
                );
+            """)
+            cur.execute("CREATE INDEX idx_disciplines_name ON Disciplines(name)")
+            cur.execute("""
+           CREATE OR REPLACE FUNCTION set_lessons_per_week() RETURNS TRIGGER AS $$
+              BEGIN
+                  UPDATE Groups SET lessons_per_week = (
+                        SELECT COUNT(*)
+                        FROM Schedule
+                        WHERE group_id = NEW.group_id
+                    )
+                  WHERE group_id = NEW.group_id;
+                RETURN NEW;
+              END;
+           $$ LANGUAGE plpgsql;
 
-            """
-
-            # SQL-запрос для создания индекса по полю Name в таблице Disciplines
-            create_index_query = """
-                CREATE INDEX IF NOT EXISTS idx_disciplines_name ON Disciplines(Name);
-            """
-            # SQL-запрос для создания триггера
-            create_trigger_query = """
-            CREATE OR REPLACE FUNCTION set_default_lessons_per_week()
-            RETURNS TRIGGER AS $$
-            BEGIN
-              NEW.Lessons_per_week := 1;
-              RETURN NEW;
-            END;
-            $$ LANGUAGE plpgsql;
-
-            DROP TRIGGER IF EXISTS set_default_lessons_per_week_trigger ON Groups;
-            CREATE TRIGGER set_default_lessons_per_week_trigger
-            BEFORE INSERT ON Groups
-            FOR EACH ROW
-            EXECUTE FUNCTION set_default_lessons_per_week();
-            """
-
-            # Выполняем SQL-запросы для создания таблиц, индекса и триггера
-            cur.execute(create_tables_query)
-            cur.execute(create_index_query)
-            cur.execute(create_trigger_query)
+           CREATE TRIGGER schedule_changes
+              AFTER INSERT OR UPDATE OR DELETE ON Schedule
+              FOR EACH ROW
+             EXECUTE FUNCTION set_lessons_per_week();
+          """)
             conn.commit()
-            QMessageBox.information(
-                self,
-                "Успех",
-                f"Структура базы данных '{db_name}' успешно создана.",
-            )
-
         except psycopg2.Error as e:
-            # Выводим сообщение об ошибке, если возникла проблема
-            QMessageBox.critical(
-                self, "Ошибка", f"Не удалось создать базу данных:\n{e}"
-            )
-
+            QMessageBox.critical(self, "Ошибка", f"Не удалось создать таблицы: {e}")
         finally:
             if conn:
                 cur.close()
@@ -687,3 +997,4 @@ class MainWindow(QMainWindow):
             if conn:
                 cur.close()
                 conn.close()
+#the end
