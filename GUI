@@ -16,7 +16,9 @@ from PyQt6.QtWidgets import (
     QTabWidget,
     QCheckBox,
     QFormLayout,
+    QMenu,
 )
+from PyQt6.QtCore import Qt
 import psycopg2
 
 # Настройки подключения (замените на ваши)
@@ -157,7 +159,7 @@ class AddDataDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-
+        self.table_windows = {}  # Словарь для хранения открытых окон с таблицами
         self.setWindowTitle("Управление базами данных")
         self.setGeometry(100, 100, 300, 300)  # Задаем размеры окна
 
@@ -281,14 +283,15 @@ class MainWindow(QMainWindow):
             for table in tables:
                 table_widget = QTableWidget()
                 self.update_table_data(table_widget, table, db_name)
-                table_widget.itemChanged.connect(lambda item, t=table, tw=table_widget: self.cell_changed(item, t, db_name, tw)) # Соединяем с cell_changed
-
+                table_widget.itemChanged.connect(lambda item, t=table, tw=table_widget: self.cell_changed(item, t, db_name, tw))
+                table_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+                table_widget.customContextMenuRequested.connect(lambda pos, t=table, tw=table_widget: self.show_context_menu(pos, t, db_name, tw))
                 # Кнопка для очистки таблицы
                 clear_table_button = QPushButton(f"Очистить таблицу {table}")
-                clear_table_button.clicked.connect(lambda checked, t=table, tw=table_widget: self.clear_table(t, db_name, tw))  # Лямбда для сохранения значения t и table_widget
-                #Кнопка для добавления в таблицу
+                clear_table_button.clicked.connect(lambda checked, t=table, tw=table_widget: self.clear_table(t, db_name, tw))
+                # Кнопка для добавления в таблицу
                 add_data_button = QPushButton(f"Добавить в таблицу {table}")
-                add_data_button.clicked.connect(lambda checked, t=table, tw=table_widget: self.add_data(t, db_name, tw))  # Лямбда для сохранения значения t и table_widget
+                add_data_button.clicked.connect(lambda checked, t=table, tw=table_widget: self.add_data(t, db_name, tw))
 
                 layout = QVBoxLayout()
                 layout.addWidget(table_widget)
@@ -304,6 +307,8 @@ class MainWindow(QMainWindow):
             table_window.setCentralWidget(tabs)
             table_window.setGeometry(100, 100, 800, 600)
             table_window.show()
+
+            self.table_windows[db_name] = table_window  # Сохраняем окно
 
         except psycopg2.Error as e:
             QMessageBox.critical(
@@ -427,6 +432,68 @@ class MainWindow(QMainWindow):
 
         except psycopg2.Error as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось обновить ячейку: {e}")
+        finally:
+            if conn:
+                cur.close()
+                conn.close()
+
+    def show_context_menu(self, position, table_name, db_name,
+                          table_widget):  # Исправлено - table_widget теперь используется в функции
+        menu = QMenu(self)
+        delete_action = menu.addAction("Удалить строку")
+
+        # Выделяем строку перед показом меню
+        row = table_widget.rowAt(position.y())
+        table_widget.selectRow(row)
+
+        action = menu.exec(table_widget.viewport().mapToGlobal(position))
+        if action == delete_action:
+            self.delete_row(table_name, db_name, table_widget, position)
+
+    def delete_row(self, table_name, db_name, table_widget, position):
+        conn = None
+        try:
+            conn = psycopg2.connect(
+                database=db_name, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
+            )
+            cur = conn.cursor()
+            row = table_widget.rowAt(position.y())  # Получаем номер строки
+
+            cur.execute(f"SELECT * FROM {table_name}")
+            rows = cur.fetchall()
+            headers = [desc[0] for desc in cur.description]
+
+            if not rows:
+                QMessageBox.critical(self, "Ошибка", f"Таблица '{table_name}' пуста.")
+                return
+            if row >= len(rows) or row < 0:
+                QMessageBox.critical(self, "Ошибка", f"Выбрана несуществующая строка.")
+                return
+
+            primary_keys = self.get_primary_keys(table_name, db_name)
+            if not primary_keys:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось получить первичные ключи таблицы {table_name}.")
+                return
+
+            where_clause = ' AND '.join([f"{key} = %s" for key in primary_keys])
+            primary_values = [str(rows[row][headers.index(key)]) for key in primary_keys]
+
+            confirm = QMessageBox.question(
+                self,
+                "Подтверждение",
+                f"Вы уверены, что хотите удалить строку из таблицы '{table_name}'?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+
+            if confirm == QMessageBox.StandardButton.Yes:
+                delete_query = f"DELETE FROM {table_name} WHERE {where_clause}"
+                cur.execute(delete_query, primary_values)
+                conn.commit()
+                QMessageBox.information(self, "Успех", "Строка успешно удалена.")
+                self.update_table_data(table_widget, table_name, db_name)
+
+        except psycopg2.Error as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось удалить строку: {e}")
         finally:
             if conn:
                 cur.close()
@@ -600,19 +667,21 @@ class MainWindow(QMainWindow):
             conn = psycopg2.connect(
                 user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
             )
-            conn.autocommit = True  # Для выполнения drop database
+            conn.autocommit = True
             cur = conn.cursor()
 
             cur.execute(f"DROP DATABASE {db_name}")
-            QMessageBox.information(
-                self, "Успех", f"База данных '{db_name}' успешно удалена."
-            )
+            QMessageBox.information(self, "Успех", f"База данных '{db_name}' успешно удалена.")
+
+            # Закрываем окно с таблицами если оно открыто
+            if db_name in self.table_windows:
+                self.table_windows[db_name].close()
+                del self.table_windows[db_name]
+
 
         except psycopg2.Error as e:
             # Выводим сообщение об ошибке, если возникла проблема
-            QMessageBox.critical(
-                self, "Ошибка", f"Не удалось удалить базу данных:\n{e}"
-            )
+            QMessageBox.critical(self, "Ошибка", f"Не удалось удалить базу данных:\n{e}")
 
         finally:
             if conn:
