@@ -210,7 +210,7 @@ class AddDataDialog(QDialog):
             )
             cur = self.conn.cursor()
             cur.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name = '{table_name}'")
-            self.columns = [row[0] for row in cur.fetchall()]
+            self.columns = [row[0] for row in cur.fetchall() if row[0] != "lessons_per_week"]
 
             layout = QFormLayout()
             for column in self.columns:
