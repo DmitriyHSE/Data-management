@@ -23,7 +23,7 @@ from PyQt6.QtCore import Qt
 import psycopg2
 
 # Настройки подключения (замените на ваши)
-DB_USER = "postgres"
+DB_USER = "user1"
 DB_PASSWORD = "1"
 DB_HOST = "127.0.0.1"
 DB_PORT = "5432"
@@ -314,7 +314,9 @@ class MainWindow(QMainWindow):
                     self.delete_db_structure(db_name)
 
     def show_tables_dialog(self):  # Исправлен вызов метода
+        print("1")
         db_names = self.get_existing_databases()
+        print("2")
         if not db_names:
             QMessageBox.warning(
                 self, "Предупреждение", "Нет доступных баз данных для отображения."
@@ -332,7 +334,7 @@ class MainWindow(QMainWindow):
         conn = None
         try:
             conn = psycopg2.connect(
-                user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
+                database="postgres", user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
             )
             cur = conn.cursor()
             cur.execute(
@@ -939,47 +941,47 @@ class MainWindow(QMainWindow):
             )
             cur = conn.cursor()
             cur.execute("""
-              CREATE TABLE IF NOT EXISTS Disciplines (
-                    Disciple_id TEXT PRIMARY KEY,
+              CREATE TABLE IF NOT EXISTS disciplines (
+                    disciple_id TEXT PRIMARY KEY,
                     Name TEXT
                 );
            """)
             cur.execute("""
-              CREATE TABLE IF NOT EXISTS Teachers (
-                    Teacher_id TEXT PRIMARY KEY,
-                    FIO TEXT
+              CREATE TABLE IF NOT EXISTS teachers (
+                    teacher_id TEXT PRIMARY KEY,
+                    fio TEXT
                 );
             """)
             cur.execute("""
-              CREATE TABLE IF NOT EXISTS Groups (
-                    Group_id TEXT PRIMARY KEY,
-                    GroupName TEXT,
-                    Lessons_per_week INT DEFAULT 1
+              CREATE TABLE IF NOT EXISTS groups (
+                    group_id TEXT PRIMARY KEY,
+                    groupName TEXT,
+                    lessons_per_week INT DEFAULT 0
                 );
            """)
             cur.execute("""
-                CREATE TABLE IF NOT EXISTS Schedule (
-                    Lesson_id TEXT PRIMARY KEY,
-                    Teacher_id TEXT REFERENCES Teachers(Teacher_id),
-                    Group_id TEXT REFERENCES Groups(Group_id),
-                    DayOfWeek TEXT,
-                    Building_online TEXT,
-                    RoomNumber TEXT,
-                    LessonType TEXT,
-                    LessonTime TEXT
+                CREATE TABLE IF NOT EXISTS schedule (
+                    lesson_id TEXT PRIMARY KEY,
+                    teacher_id TEXT REFERENCES teachers(teacher_id),
+                    group_id TEXT REFERENCES groups(group_id),
+                    dayOfWeek TEXT,
+                    building_online TEXT,
+                    roomNumber TEXT,
+                    lessonType TEXT,
+                    lessonTime TEXT
                 );
             """)
             cur.execute("""
-               CREATE TABLE IF NOT EXISTS Students (
-                    Student_id TEXT PRIMARY KEY,
-                    FIO TEXT
+               CREATE TABLE IF NOT EXISTS students (
+                    student_id TEXT PRIMARY KEY,
+                    fio TEXT
                 );
             """)
             cur.execute("""
-              CREATE TABLE IF NOT EXISTS Group_Students (
-                   Group_id TEXT REFERENCES Groups(Group_id),
-                   Student_id TEXT REFERENCES Students(Student_id),
-                   PRIMARY KEY(Group_id, Student_id)
+              CREATE TABLE IF NOT EXISTS group_students (
+                   group_id TEXT REFERENCES groups(group_id),
+                   student_id TEXT REFERENCES students(student_id),
+                   PRIMARY KEY(group_id, student_id)
                );
             """)
             cur.execute("CREATE INDEX idx_disciplines_name ON Disciplines(name)")
@@ -988,7 +990,7 @@ class MainWindow(QMainWindow):
               BEGIN
                   UPDATE Groups SET lessons_per_week = (
                         SELECT COUNT(*)
-                        FROM Schedule
+                        FROM schedule
                         WHERE group_id = NEW.group_id
                     )
                   WHERE group_id = NEW.group_id;
@@ -997,7 +999,7 @@ class MainWindow(QMainWindow):
            $$ LANGUAGE plpgsql;
 
            CREATE TRIGGER schedule_changes
-              AFTER INSERT OR UPDATE OR DELETE ON Schedule
+              AFTER INSERT OR UPDATE OR DELETE ON schedule
               FOR EACH ROW
              EXECUTE FUNCTION set_lessons_per_week();
           """)
