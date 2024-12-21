@@ -210,7 +210,7 @@ class AddDataDialog(QDialog):
             )
             cur = self.conn.cursor()
             cur.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name = '{table_name}'")
-            self.columns = [row[0] for row in cur.fetchall()]
+            self.columns = [row[0] for row in cur.fetchall() if row[0] != "lessons_per_week"]
 
             layout = QFormLayout()
             for column in self.columns:
@@ -314,7 +314,9 @@ class MainWindow(QMainWindow):
                     self.delete_db_structure(db_name)
 
     def show_tables_dialog(self):  # Исправлен вызов метода
+        print("1")
         db_names = self.get_existing_databases()
+        print("2")
         if not db_names:
             QMessageBox.warning(
                 self, "Предупреждение", "Нет доступных баз данных для отображения."
@@ -332,7 +334,7 @@ class MainWindow(QMainWindow):
         conn = None
         try:
             conn = psycopg2.connect(
-                user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
+                database="postgres", user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
             )
             cur = conn.cursor()
             cur.execute(
@@ -423,6 +425,9 @@ class MainWindow(QMainWindow):
                 return
 
             tabs = QTabWidget(self)
+            tabs.currentChanged.connect(
+                lambda index: self.on_tab_changed(index, tabs, db_name))  # Подключение обработчика
+
             for table in tables:
                 table_widget = QTableWidget()
                 self.update_table_data(table_widget, table, db_name)
@@ -431,11 +436,11 @@ class MainWindow(QMainWindow):
                 table_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
                 table_widget.customContextMenuRequested.connect(
                     lambda pos, t=table, tw=table_widget: self.show_context_menu(pos, t, db_name, tw))
-                # Кнопка для очистки таблицы
+
                 clear_table_button = QPushButton(f"Очистить таблицу {table}")
                 clear_table_button.clicked.connect(
                     lambda checked, t=table, tw=table_widget: self.clear_table(t, db_name, tw))
-                # Кнопка для добавления в таблицу
+
                 add_data_button = QPushButton(f"Добавить в таблицу {table}")
                 add_data_button.clicked.connect(lambda checked, t=table, tw=table_widget: self.add_data(t, db_name, tw))
 
@@ -454,16 +459,25 @@ class MainWindow(QMainWindow):
             table_window.setGeometry(100, 100, 800, 600)
             table_window.show()
 
-            self.table_windows[db_name] = table_window  # Сохраняем окно
+            self.table_windows[db_name] = table_window
 
         except psycopg2.Error as e:
-            QMessageBox.critical(
-                self, "Ошибка", f"Не удалось отобразить таблицы: {e}"
-            )
+            QMessageBox.critical(self, "Ошибка", f"Не удалось отобразить таблицы: {e}")
         finally:
             if conn:
                 cur.close()
                 conn.close()
+
+    def add_data(self, table_name, db_name, table_widget):
+        add_data_dialog = AddDataDialog(self, table_name, db_name)
+        result = add_data_dialog.exec()
+
+        if result == QDialog.DialogCode.Accepted:
+            data = add_data_dialog.get_data()
+            if data:
+                self.insert_data_into_table(table_name, db_name, data, table_widget)
+            else:
+                QMessageBox.warning(self, "Предупреждение", "Не удалось получить данные")
 
     def add_data(self, table_name, db_name, table_widget):
         add_data_dialog = AddDataDialog(self, table_name, db_name)
@@ -674,6 +688,13 @@ class MainWindow(QMainWindow):
                 cur.close()
                 conn.close()
 
+    def on_tab_changed(self, index, tabs, db_name):
+        # Получаем имя вкладки (таблицы) по индексу
+        table_name = tabs.tabText(index)
+        if table_name == "groups":  # Проверяем, что это вкладка "groups"
+            widget_container = tabs.widget(index)  # Получаем виджет текущей вкладки
+            table_widget = widget_container.layout().itemAt(0).widget()  # Получаем QTableWidget
+            self.update_table_data(table_widget, table_name, db_name)  # Обновляем данные
     def update_table_data(self, table_widget, table_name, db_name):
         conn = None
         try:
@@ -681,6 +702,20 @@ class MainWindow(QMainWindow):
                 database=db_name, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
             )
             cur = conn.cursor()
+
+            # Обновление поля lessons_per_week в таблице Groups
+            if table_name == "schedule":
+                cur.execute("""
+                    UPDATE groups
+                    SET lessons_per_week = (
+                        SELECT COUNT(*)
+                        FROM schedule
+                        WHERE schedule.group_id = groups.group_id
+                    );
+                """)
+                conn.commit()
+
+            # Получение данных для отображения в таблице
             cur.execute(f"SELECT * FROM {table_name}")
             rows = cur.fetchall()
             headers = [desc[0] for desc in cur.description]
@@ -692,6 +727,11 @@ class MainWindow(QMainWindow):
             for row_idx, row_data in enumerate(rows):
                 for col_idx, cell_data in enumerate(row_data):
                     item = QTableWidgetItem(str(cell_data))
+
+                    # Делаем ячейки lessons_per_week неизменяемыми
+                    if headers[col_idx] == "lessons_per_week":
+                        item.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
+
                     table_widget.setItem(row_idx, col_idx, item)
 
         except psycopg2.Error as e:
@@ -878,7 +918,7 @@ class MainWindow(QMainWindow):
         conn = None
         try:
             conn = psycopg2.connect(
-                user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
+                database="postgres",user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
             )
             conn.autocommit = True
             cur = conn.cursor()
@@ -916,7 +956,7 @@ class MainWindow(QMainWindow):
               CREATE TABLE IF NOT EXISTS Groups (
                     Group_id TEXT PRIMARY KEY,
                     GroupName TEXT,
-                    Lessons_per_week INT DEFAULT 1
+                    Lessons_per_week INT DEFAULT 0
                 );
            """)
             cur.execute("""
@@ -944,7 +984,7 @@ class MainWindow(QMainWindow):
                    PRIMARY KEY(Group_id, Student_id)
                );
             """)
-            cur.execute("CREATE INDEX idx_disciplines_name ON Disciplines(name)")
+            cur.execute("CREATE INDEX idx_schedule_group_id ON Schedule(Group_id)")# Создаём индекс на Schedule(group_id)
             cur.execute("""
            CREATE OR REPLACE FUNCTION set_lessons_per_week() RETURNS TRIGGER AS $$
               BEGIN
@@ -975,7 +1015,7 @@ class MainWindow(QMainWindow):
         conn = None
         try:
             conn = psycopg2.connect(
-                user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
+                database="postgres", user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
             )
             conn.autocommit = True
             cur = conn.cursor()
