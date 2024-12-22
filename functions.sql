@@ -186,3 +186,10 @@ BEGIN
 END;
 $$;
 
+--  Получение команды для удаления базы данных
+CREATE OR REPLACE FUNCTION drop_database_command(p_db_name TEXT)
+RETURNS TEXT AS $$
+BEGIN
+    RETURN format('DROP DATABASE %I', p_db_name);
+END;
+$$ LANGUAGE plpgsql;
