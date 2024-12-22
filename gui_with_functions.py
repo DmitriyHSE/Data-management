@@ -1066,7 +1066,7 @@ class MainWindow(QMainWindow):
                 cur.close()
                 conn.close()
 
-    def delete_db_structure(self, db_name):
+        def delete_db_structure(self, db_name):
         conn = None
         try:
             conn = psycopg2.connect(
@@ -1074,8 +1074,13 @@ class MainWindow(QMainWindow):
             )
             conn.autocommit = True
             cur = conn.cursor()
+            with open("functions.sql", "r") as file:
+                sql_script = file.read()
+            cur.execute(sql_script)
+            cur.execute("SELECT public.drop_database_command(%s)", (db_name,))
+            drop_command = cur.fetchone()[0] # Получаем SQL запрос из процедуры
+            cur.execute(drop_command) #Выполняем полученную команду
 
-            cur.execute(f"DROP DATABASE {db_name}")
             QMessageBox.information(self, "Успех", f"База данных '{db_name}' успешно удалена.")
 
             # Закрываем окно с таблицами если оно открыто
@@ -1083,11 +1088,9 @@ class MainWindow(QMainWindow):
                 self.table_windows[db_name].close()
                 del self.table_windows[db_name]
 
-
         except psycopg2.Error as e:
             # Выводим сообщение об ошибке, если возникла проблема
             QMessageBox.critical(self, "Ошибка", f"Не удалось удалить базу данных:\n{e}")
-
         finally:
             if conn:
                 cur.close()
