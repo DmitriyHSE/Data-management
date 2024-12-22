@@ -23,8 +23,8 @@ from PyQt6.QtCore import Qt
 import psycopg2
 
 # Настройки подключения (замените на ваши)
-DB_USER = "user1"
-DB_PASSWORD = "1"
+DB_USER = "postgres"
+DB_PASSWORD = "admin"
 DB_HOST = "127.0.0.1"
 DB_PORT = "5432"
 
@@ -1066,7 +1066,7 @@ class MainWindow(QMainWindow):
                 cur.close()
                 conn.close()
 
-        def delete_db_structure(self, db_name):
+    def delete_db_structure(self, db_name):
         conn = None
         try:
             conn = psycopg2.connect(
