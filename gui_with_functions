@@ -995,56 +995,57 @@ class MainWindow(QMainWindow):
             )
             cur = conn.cursor()
             cur.execute("""
-              CREATE TABLE IF NOT EXISTS disciplines (
-                    disciple_id TEXT PRIMARY KEY,
+              CREATE TABLE IF NOT EXISTS Disciplines (
+                    Disciple_id TEXT PRIMARY KEY,
                     Name TEXT
                 );
            """)
             cur.execute("""
-              CREATE TABLE IF NOT EXISTS teachers (
-                    teacher_id TEXT PRIMARY KEY,
-                    fio TEXT
+              CREATE TABLE IF NOT EXISTS Teachers (
+                    Teacher_id TEXT PRIMARY KEY,
+                    FIO TEXT
                 );
             """)
             cur.execute("""
-              CREATE TABLE IF NOT EXISTS groups (
-                    group_id TEXT PRIMARY KEY,
-                    groupName TEXT,
-                    lessons_per_week INT DEFAULT 0
+              CREATE TABLE IF NOT EXISTS Groups (
+                    Group_id TEXT PRIMARY KEY,
+                    GroupName TEXT,
+                    Lessons_per_week INT DEFAULT 0
                 );
            """)
             cur.execute("""
-                CREATE TABLE IF NOT EXISTS schedule (
-                    lesson_id TEXT PRIMARY KEY,
-                    teacher_id TEXT REFERENCES teachers(teacher_id),
-                    group_id TEXT REFERENCES groups(group_id),
-                    dayOfWeek TEXT,
-                    building_online TEXT,
-                    roomNumber TEXT,
-                    lessonType TEXT,
-                    lessonTime TEXT
+                CREATE TABLE IF NOT EXISTS Schedule (
+                    Lesson_id TEXT PRIMARY KEY,
+                    Teacher_id TEXT REFERENCES Teachers(Teacher_id),
+                    Group_id TEXT REFERENCES Groups(Group_id),
+                    DayOfWeek TEXT,
+                    Building_online TEXT,
+                    RoomNumber TEXT,
+                    LessonType TEXT,
+                    LessonTime TEXT
                 );
             """)
             cur.execute("""
-               CREATE TABLE IF NOT EXISTS students (
-                    student_id TEXT PRIMARY KEY,
-                    fio TEXT
+               CREATE TABLE IF NOT EXISTS Students (
+                    Student_id TEXT PRIMARY KEY,
+                    FIO TEXT
                 );
             """)
             cur.execute("""
-              CREATE TABLE IF NOT EXISTS group_students (
-                   group_id TEXT REFERENCES groups(group_id),
-                   student_id TEXT REFERENCES students(student_id),
-                   PRIMARY KEY(group_id, student_id)
+              CREATE TABLE IF NOT EXISTS Group_Students (
+                   Group_id TEXT REFERENCES Groups(Group_id),
+                   Student_id TEXT REFERENCES Students(Student_id),
+                   PRIMARY KEY(Group_id, Student_id)
                );
             """)
-            cur.execute("CREATE INDEX idx_disciplines_name ON Disciplines(name)")
+            cur.execute(
+                "CREATE INDEX idx_schedule_group_id ON Schedule(Group_id)")  # Создаём индекс на Schedule(group_id)
             cur.execute("""
            CREATE OR REPLACE FUNCTION set_lessons_per_week() RETURNS TRIGGER AS $$
               BEGIN
                   UPDATE Groups SET lessons_per_week = (
                         SELECT COUNT(*)
-                        FROM schedule
+                        FROM Schedule
                         WHERE group_id = NEW.group_id
                     )
                   WHERE group_id = NEW.group_id;
@@ -1053,7 +1054,7 @@ class MainWindow(QMainWindow):
            $$ LANGUAGE plpgsql;
 
            CREATE TRIGGER schedule_changes
-              AFTER INSERT OR UPDATE OR DELETE ON schedule
+              AFTER INSERT OR UPDATE OR DELETE ON Schedule
               FOR EACH ROW
              EXECUTE FUNCTION set_lessons_per_week();
           """)
