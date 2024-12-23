@@ -194,3 +194,107 @@ BEGIN
     RETURN format('DROP DATABASE %I', p_db_name);
 END;
 $$ LANGUAGE plpgsql;
+
+-- Создание таблицы Disciplines
+CREATE OR REPLACE PROCEDURE create_disciplines_table()
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    CREATE TABLE IF NOT EXISTS Disciplines (
+        Disciple_id TEXT PRIMARY KEY,
+        Name TEXT
+    );
+END;
+$$;
+
+-- Создание таблицы Teachers
+CREATE OR REPLACE PROCEDURE create_teachers_table()
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    CREATE TABLE IF NOT EXISTS Teachers (
+        Teacher_id TEXT PRIMARY KEY,
+        FIO TEXT
+    );
+END;
+$$;
+
+-- Создание таблицы Groups
+CREATE OR REPLACE PROCEDURE create_groups_table()
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    CREATE TABLE IF NOT EXISTS Groups (
+        Group_id TEXT PRIMARY KEY,
+        GroupName TEXT,
+        Lessons_per_week INT DEFAULT 0
+    );
+END;
+$$;
+
+-- Создание таблицы Students
+CREATE OR REPLACE PROCEDURE create_students_table()
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    CREATE TABLE IF NOT EXISTS Students (
+        Student_id TEXT PRIMARY KEY,
+        FIO TEXT
+    );
+END;
+$$;
+
+-- Создание таблицы Group_Students
+CREATE OR REPLACE PROCEDURE create_group_students_table()
+LANGUAGE plpgsql
+AS $$
+BEGIN
+     CREATE TABLE IF NOT EXISTS Group_Students (
+        Group_id TEXT REFERENCES Groups(Group_id),
+        Student_id TEXT REFERENCES Students(Student_id),
+        PRIMARY KEY(Group_id, Student_id)
+    );
+END;
+$$;
+
+-- Создание таблицы Schedule
+CREATE OR REPLACE PROCEDURE create_schedule_table()
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    CREATE TABLE IF NOT EXISTS Schedule (
+        Lesson_id TEXT PRIMARY KEY,
+        Teacher_id TEXT REFERENCES Teachers(Teacher_id),
+        Group_id TEXT REFERENCES Groups(Group_id),
+        DayOfWeek TEXT,
+        Building_online TEXT,
+        RoomNumber TEXT,
+        LessonType TEXT,
+        LessonTime TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_schedule_group_id ON Schedule(Group_id);
+END;
+$$;
+
+    CREATE OR REPLACE FUNCTION set_lessons_per_week() RETURNS TRIGGER AS $$
+        BEGIN
+            UPDATE Groups SET "lessons_per_week" = (
+                SELECT COUNT(*)
+                FROM Schedule
+                WHERE group_id = NEW.group_id
+            )
+        WHERE group_id = NEW.group_id;
+        RETURN NEW;
+        END;
+    $$ LANGUAGE plpgsql;
+
+   CREATE OR REPLACE PROCEDURE create_schedule_trigger()
+LANGUAGE plpgsql
+AS $$
+BEGIN
+   CREATE OR REPLACE TRIGGER schedule_changes
+        AFTER INSERT OR UPDATE OR DELETE ON Schedule
+        FOR EACH ROW
+        EXECUTE PROCEDURE set_lessons_per_week();
+END;
+$$;
