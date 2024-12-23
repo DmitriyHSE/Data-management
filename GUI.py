@@ -976,7 +976,12 @@ class MainWindow(QMainWindow):
             )
             conn.autocommit = True
             cur = conn.cursor()
-            cur.execute(f"CREATE DATABASE {db_name}")
+            with open("functions.sql", "r") as file:
+                sql_script = file.read()
+            cur.execute(sql_script)
+            cur.execute("SELECT public.create_database_command(%s)", (db_name,))
+            create_command = cur.fetchone()[0]
+            cur.execute(create_command)
             self.create_tables(db_name)
             QMessageBox.information(self, "Успех", f"База данных '{db_name}' успешно создана.")
             dialog.accept()
