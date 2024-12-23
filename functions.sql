@@ -298,3 +298,11 @@ BEGIN
         EXECUTE PROCEDURE set_lessons_per_week();
 END;
 $$;
+
+--  Получение команды для создания базы данных
+CREATE OR REPLACE FUNCTION create_database_command(p_db_name TEXT)
+RETURNS TEXT AS $$
+BEGIN
+    RETURN format('CREATE DATABASE %I', p_db_name);
+END;
+$$ LANGUAGE plpgsql;
