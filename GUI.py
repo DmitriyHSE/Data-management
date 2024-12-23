@@ -28,7 +28,48 @@ DB_PASSWORD = "admin"
 DB_HOST = "127.0.0.1"
 DB_PORT = "5432"
 
+class Database:
+    def __init__(self, name, user, password, host, port=5432):
+        self.dbname = name.strip()
+        self.user = user.strip()
+        self.password = password.strip()
+        self.host = host.strip()
+        self.port = port
+        self.connection = None
+        self.cursor = None
 
+    def connectDB(self):
+        try:
+            self.connection = psycopg2.connect(
+                dbname=self.dbname,
+                user=self.user,
+                password=self.password,
+                host=self.host,
+                port=self.port,
+                options="-c client_encoding=UTF8"
+            )
+            self.cursor = self.connection.cursor()
+
+        except psycopg2.OperationalError as e:
+            print(f"Error connecting to database '{self.dbname}': {e}")
+            raise
+
+    def close_connection(self):
+        if self.connection:
+            if self.cursor:
+               self.cursor.close()
+            self.connection.close()
+
+    def get_all_column_names(self, selected_table):
+        try:
+            self.cursor.execute("SELECT * FROM public.get_column_names(%s);", (selected_table,))
+            result = self.cursor.fetchall()
+            if result:
+                return [row[0] for row in result]
+            return None
+        except Exception as e:
+            print(f"Error calling get_column_names: {e}")
+            return None
 class SearchDialog(QDialog):
     def __init__(self, parent=None, db_name=None, tables=None):
         super().__init__(parent)
@@ -85,27 +126,24 @@ class SearchDialog(QDialog):
                 database=self.db_name, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
             )
             cur = conn.cursor()
+            with open("functions.sql", "r") as file:
+                sql_script = file.read()
+            cur.execute(sql_script)
             selected_table = self.table_combo.currentText()
-            cur.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name = '{selected_table}'")
+            #cur.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name = '{selected_table}'")
+            cur.execute("SELECT * FROM public.get_column_names(%s);", (selected_table,))
             columns = [row[0] for row in cur.fetchall()]
             text_columns = []
             for column in columns:
-                cur.execute(
-                    f"SELECT data_type, is_nullable FROM information_schema.columns WHERE table_name = '{selected_table}' and column_name = '{column}';")
+                #cur.execute(
+                 #   f"SELECT data_type, is_nullable FROM information_schema.columns WHERE table_name = '{selected_table}' and column_name = '{column}';")
+                cur.execute("SELECT * FROM public.get_column_info(%s, %s);", (selected_table, column))
                 data_type, is_nullable = cur.fetchone()
                 if (data_type == 'text' or data_type == 'character varying') and is_nullable == 'YES':
-                    cur.execute(f"""SELECT COUNT(*)
-                     FROM information_schema.table_constraints AS tc
-                     JOIN information_schema.key_column_usage AS kcu
-                     ON tc.constraint_name = kcu.constraint_name
-                     AND tc.table_schema = kcu.table_schema
-                     AND tc.table_name = kcu.table_name
-                     WHERE tc.constraint_type = 'PRIMARY KEY'
-                     AND tc.table_name = '{selected_table}' AND kcu.column_name = '{column}';""")
+                    cur.execute("SELECT public.check_primary_key(%s, %s);", (selected_table, column))
                     is_primary = cur.fetchone()[0]
                     if is_primary == 0:
                         text_columns.append(column)
-
             self.column_combo.clear()
             self.column_combo.addItems(text_columns)
         except psycopg2.Error as e:
@@ -209,16 +247,21 @@ class AddDataDialog(QDialog):
                 database=db_name, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
             )
             cur = self.conn.cursor()
-            cur.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name = '{table_name}'")
+            with open("functions.sql", "r") as file:
+                sql_script = file.read()
+            cur.execute(sql_script)
+            print("Робит11")
+            cur.execute("SELECT public.get_column_names(%s);", (table_name,))
+            print("Робит22")
+            #cur.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name = '{table_name}'")
             self.columns = [row[0] for row in cur.fetchall() if row[0] != "lessons_per_week"]
-
             layout = QFormLayout()
+            print(len(self.columns))
             for column in self.columns:
                 label = QLabel(column)
                 input_field = QLineEdit()
                 layout.addRow(label, input_field)
                 self.field_inputs[column] = input_field
-
             button_box = QDialogButtonBox(
                 QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
             )
@@ -337,9 +380,10 @@ class MainWindow(QMainWindow):
                 database="postgres", user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
             )
             cur = conn.cursor()
-            cur.execute(
-                "SELECT datname FROM pg_database WHERE datistemplate = false;"
-            )
+            with open("functions.sql", "r") as file:
+                sql_script = file.read()
+            cur.execute(sql_script)
+            cur.callproc("get_databases")
             db_names = [row[0] for row in cur.fetchall()]
             return db_names
         except psycopg2.Error as e:
@@ -412,10 +456,10 @@ class MainWindow(QMainWindow):
                 database=db_name, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
             )
             cur = conn.cursor()
-
-            cur.execute(
-                "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE';"
-            )
+            with open("functions.sql", "r") as file:
+                sql_script = file.read()
+            cur.execute(sql_script)
+            cur.callproc("get_public_tables")
             tables = [row[0] for row in cur.fetchall()]
 
             if not tables:
@@ -469,9 +513,10 @@ class MainWindow(QMainWindow):
                 conn.close()
 
     def add_data(self, table_name, db_name, table_widget):
+        print("Add data1")
         add_data_dialog = AddDataDialog(self, table_name, db_name)
+        print("add data2")
         result = add_data_dialog.exec()
-
         if result == QDialog.DialogCode.Accepted:
             data = add_data_dialog.get_data()
             if data:
@@ -479,16 +524,6 @@ class MainWindow(QMainWindow):
             else:
                 QMessageBox.warning(self, "Предупреждение", "Не удалось получить данные")
 
-    def add_data(self, table_name, db_name, table_widget):
-        add_data_dialog = AddDataDialog(self, table_name, db_name)
-        result = add_data_dialog.exec()
-
-        if result == QDialog.DialogCode.Accepted:
-            data = add_data_dialog.get_data()
-            if data:
-                self.insert_data_into_table(table_name, db_name, data, table_widget)
-            else:
-                QMessageBox.warning(self, "Предупреждение", "Не удалось получить данные")
 
     def insert_data_into_table(self, table_name, db_name, data, table_widget):
         conn = None
@@ -497,12 +532,16 @@ class MainWindow(QMainWindow):
                 database=db_name, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
             )
             cur = conn.cursor()
+            #with open("functions.sql", "r") as file:
+             #   sql_script = file.read()
+            #cur.execute(sql_script)
             columns = list(data.keys())
             values = list(data.values())
             placeholders = ', '.join(['%s'] * len(values))  # Подготавливаем placeholders
-
+            print("Yes99")
             query = f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders});"
             cur.execute(query, values)
+            print("Yes991")
             conn.commit()
             QMessageBox.information(self, "Успех", f"Данные успешно добавлены в таблицу '{table_name}'.")
             self.update_table_data(table_widget, table_name, db_name)
@@ -524,7 +563,9 @@ class MainWindow(QMainWindow):
                 database=db_name, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
             )
             cur = conn.cursor()
-
+            with open("functions.sql", "r") as file:
+                sql_script = file.read()
+            cur.execute(sql_script)
             confirm = QMessageBox.question(
                 self,
                 "Подтверждение",
@@ -533,7 +574,8 @@ class MainWindow(QMainWindow):
             )
 
             if confirm == QMessageBox.StandardButton.Yes:
-                cur.execute(f"TRUNCATE TABLE {table_name} CASCADE;")
+                cur.callproc("truncate_table",(table_name,))
+                #cur.execute(f"TRUNCATE TABLE {table_name} CASCADE;")
                 conn.commit()
                 QMessageBox.information(self, "Успех", f"Таблица '{table_name}' очищена.")
 
@@ -556,6 +598,9 @@ class MainWindow(QMainWindow):
                 database=db_name, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
             )
             cur = conn.cursor()
+            with open("functions.sql", "r") as file:
+                sql_script = file.read()
+            cur.execute(sql_script)
             row = item.row()
             col = item.column()
             new_value = item.text()
@@ -583,10 +628,11 @@ class MainWindow(QMainWindow):
             if str(rows[row][col]) == new_value:
                 return
 
-            update_query = f"UPDATE {table_name} SET {update_column} = %s WHERE {where_clause}"
-            cur.execute(update_query, (new_value, *primary_values))
+            #update_query = f"UPDATE {table_name} SET {update_column} = %s WHERE {where_clause}"
+            #cur.execute(update_query, (new_value, *primary_values))
+            cur.execute("SELECT public.update_table_record(%s, %s, %s, %s, %s);",
+                        (table_name, primary_keys, primary_values, update_column, new_value))
             conn.commit()
-
             QMessageBox.information(self, "Успех", "Ячейка успешно обновлена.")
             self.update_table_data(table_widget, table_name, db_name)
 
@@ -617,6 +663,9 @@ class MainWindow(QMainWindow):
                 database=db_name, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
             )
             cur = conn.cursor()
+            with open("functions.sql", "r") as file:
+                sql_script = file.read()
+            cur.execute(sql_script)
             row = table_widget.rowAt(position.y())  # Получаем номер строки
 
             cur.execute(f"SELECT * FROM {table_name}")
@@ -646,8 +695,10 @@ class MainWindow(QMainWindow):
             )
 
             if confirm == QMessageBox.StandardButton.Yes:
-                delete_query = f"DELETE FROM {table_name} WHERE {where_clause}"
-                cur.execute(delete_query, primary_values)
+                #delete_query = f"DELETE FROM {table_name} WHERE {where_clause}"
+                #cur.execute(delete_query, primary_values)
+                cur.execute("SELECT public.delete_table_record(%s, %s, %s);",
+                            (table_name, primary_keys, primary_values))
                 conn.commit()
                 QMessageBox.information(self, "Успех", "Строка успешно удалена.")
                 self.update_table_data(table_widget, table_name, db_name)
@@ -666,7 +717,10 @@ class MainWindow(QMainWindow):
                 database=db_name, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
             )
             cur = conn.cursor()
-
+            #with open("functions.sql", "r") as file:
+             #   sql_script = file.read()
+            #cur.execute(sql_script)
+            #cur.execute("SELECT public.get_primary_key_columns(%s);", (table_name,))
             cur.execute(f"""
               SELECT kcu.column_name
               FROM information_schema.table_constraints AS tc
@@ -940,69 +994,18 @@ class MainWindow(QMainWindow):
                 database=db_name, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
             )
             cur = conn.cursor()
-            cur.execute("""
-              CREATE TABLE IF NOT EXISTS Disciplines (
-                    Disciple_id TEXT PRIMARY KEY,
-                    Name TEXT
-                );
-           """)
-            cur.execute("""
-              CREATE TABLE IF NOT EXISTS Teachers (
-                    Teacher_id TEXT PRIMARY KEY,
-                    FIO TEXT
-                );
-            """)
-            cur.execute("""
-              CREATE TABLE IF NOT EXISTS Groups (
-                    Group_id TEXT PRIMARY KEY,
-                    GroupName TEXT,
-                    Lessons_per_week INT DEFAULT 0
-                );
-           """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS Schedule (
-                    Lesson_id TEXT PRIMARY KEY,
-                    Teacher_id TEXT REFERENCES Teachers(Teacher_id),
-                    Group_id TEXT REFERENCES Groups(Group_id),
-                    DayOfWeek TEXT,
-                    Building_online TEXT,
-                    RoomNumber TEXT,
-                    LessonType TEXT,
-                    LessonTime TEXT
-                );
-            """)
-            cur.execute("""
-               CREATE TABLE IF NOT EXISTS Students (
-                    Student_id TEXT PRIMARY KEY,
-                    FIO TEXT
-                );
-            """)
-            cur.execute("""
-              CREATE TABLE IF NOT EXISTS Group_Students (
-                   Group_id TEXT REFERENCES Groups(Group_id),
-                   Student_id TEXT REFERENCES Students(Student_id),
-                   PRIMARY KEY(Group_id, Student_id)
-               );
-            """)
-            cur.execute("CREATE INDEX idx_schedule_group_id ON Schedule(Group_id)")# Создаём индекс на Schedule(group_id)
-            cur.execute("""
-           CREATE OR REPLACE FUNCTION set_lessons_per_week() RETURNS TRIGGER AS $$
-              BEGIN
-                  UPDATE Groups SET lessons_per_week = (
-                        SELECT COUNT(*)
-                        FROM Schedule
-                        WHERE group_id = NEW.group_id
-                    )
-                  WHERE group_id = NEW.group_id;
-                RETURN NEW;
-              END;
-           $$ LANGUAGE plpgsql;
-
-           CREATE TRIGGER schedule_changes
-              AFTER INSERT OR UPDATE OR DELETE ON Schedule
-              FOR EACH ROW
-             EXECUTE FUNCTION set_lessons_per_week();
-          """)
+            with open("functions.sql", "r") as file:
+                sql_script = file.read()
+            cur.execute(sql_script)
+            # Вызываем процедуры для создания таблиц
+            cur.execute("CALL create_disciplines_table();")
+            cur.execute("CALL create_teachers_table();")
+            cur.execute("CALL create_groups_table();")
+            cur.execute("CALL create_students_table();")
+            cur.execute("CALL create_group_students_table();")
+            cur.execute("CALL create_schedule_table();")
+            # Вызываем хранимую процедуру для создания триггера
+            cur.execute("CALL create_schedule_trigger();")
             conn.commit()
         except psycopg2.Error as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось создать таблицы: {e}")
@@ -1019,8 +1022,13 @@ class MainWindow(QMainWindow):
             )
             conn.autocommit = True
             cur = conn.cursor()
+            with open("functions.sql", "r") as file:
+                sql_script = file.read()
+            cur.execute(sql_script)
+            cur.execute("SELECT public.drop_database_command(%s)", (db_name,))
+            drop_command = cur.fetchone()[0] # Получаем SQL запрос из процедуры
+            cur.execute(drop_command) #Выполняем полученную команду
 
-            cur.execute(f"DROP DATABASE {db_name}")
             QMessageBox.information(self, "Успех", f"База данных '{db_name}' успешно удалена.")
 
             # Закрываем окно с таблицами если оно открыто
@@ -1028,11 +1036,9 @@ class MainWindow(QMainWindow):
                 self.table_windows[db_name].close()
                 del self.table_windows[db_name]
 
-
         except psycopg2.Error as e:
             # Выводим сообщение об ошибке, если возникла проблема
             QMessageBox.critical(self, "Ошибка", f"Не удалось удалить базу данных:\n{e}")
-
         finally:
             if conn:
                 cur.close()
